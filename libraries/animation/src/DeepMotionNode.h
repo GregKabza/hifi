@@ -100,11 +100,6 @@ protected:
     public:
         friend void DeepMotionNode::computeTargets(const AnimContext& context, const AnimVariantMap& animVars);
 
-        enum class IKTargetType {
-            DMTracker = 0,
-            Unknown
-        };
-
         IKTargetVar(const QString& jointNameIn, const QString& controllerBoneTargetIn,
             const QString& targetLinkName,
             const QString& positionVar, const QString& rotationVar, const glm::quat& rotationOffset,

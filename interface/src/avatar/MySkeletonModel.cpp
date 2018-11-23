@@ -196,7 +196,9 @@ void MySkeletonModel::updateRig(float deltaTime, glm::mat4 parentTransform) {
     _prevIsFlying = isFlying;
 
     // if hips are not under direct control, estimate the hips position.
-    if (avatarHeadPose.isValid() && !(params.primaryControllerFlags[Rig::PrimaryControllerType_Hips] & (uint8_t)Rig::ControllerFlags::Enabled)) {
+    if (avatarHeadPose.isValid() 
+        && !(params.primaryControllerFlags[Rig::PrimaryControllerType_Hips] & (uint8_t)Rig::ControllerFlags::Enabled)
+        && !_rig.getDeepMotionNode()) {
         bool isFlying = (myAvatar->getCharacterController()->getState() == CharacterController::State::Hover || myAvatar->getCharacterController()->computeCollisionGroup() == BULLET_COLLISION_GROUP_COLLISIONLESS);
 
         if (!_prevHipsValid) {

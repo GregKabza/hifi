@@ -19,6 +19,7 @@
 #include "ResourceCache.h"
 #include "Profile.h"
 #include "PathUtils.h"
+#include "IKTarget.h"
 
 #include <fstream>
 #include <string>
@@ -498,10 +499,10 @@ void DeepMotionNode::computeTargets(const AnimContext& context, const AnimVarian
             }
         }
 
-        int targetType = (int)IKTargetVar::IKTargetType::Unknown;
+        int targetType = (int)IKTarget::Type::Unknown;
         if (targetVar.jointIndex != -1) {
-            targetType = animVars.lookup(targetVar.typeVar, (int)IKTargetVar::IKTargetType::Unknown);
-            if (targetType == (int)IKTargetVar::IKTargetType::DMTracker) {
+            targetType = animVars.lookup(targetVar.typeVar, (int)IKTarget::Type::Unknown);
+            if (targetType != (int)IKTarget::Type::Unknown) {
                 auto linkIndex = _linkNameToIndex.at(targetVar.targetLinkName.toStdString());
                 AnimPose absPose = _skeleton->getAbsolutePose(targetVar.jointIndex, _relativePoses);
 
@@ -520,8 +521,52 @@ void DeepMotionNode::computeTargets(const AnimContext& context, const AnimVarian
 
                 targetVar.transform = toAvtTransform(unskinnedTracker);
 
+                const auto& boneTarget = targetVar.getControllerBoneTarget();
+                const auto& trackerTransform = targetVar.transform;
+
+                bool trackPosition = targetVar.trackPosition
+                    && (targetType == (int)IKTarget::Type::RotationAndPosition 
+                        || targetType == (int)IKTarget::Type::HmdHead 
+                        || targetType == (int)IKTarget::Type::Spline);
+                _characterController->SetLimbPositionTrackingEnabled(boneTarget, trackPosition);
+                if (trackPosition) {
+                    _characterController->SetTrackingPosition(boneTarget, trackerTransform.m_Position);
+                    _isAnyTrackerActive = true;
+                }
+                
+                bool trackRotation = targetVar.trackRotation 
+                    && boneTarget != avatar::IHumanoidControllerHandle::BoneTarget::Root
+                    && (targetType == (int)IKTarget::Type::RotationAndPosition
+                        || targetType == (int)IKTarget::Type::HmdHead
+                        || (targetType == (int)IKTarget::Type::RotationOnly && boneTarget != avatar::IHumanoidControllerHandle::BoneTarget::Head));
+                _characterController->SetLimbOrientationTrackingEnabled(boneTarget, trackRotation);
+                if (trackRotation) {
+                    _characterController->SetTrackingOrientation(boneTarget, trackerTransform.m_Orientation);
+                    _isAnyTrackerActive = true;
+                }
+
+                if (trackPosition || trackRotation)
+                    qCCritical(animation) << "GK_GK processing tracker: " << targetVar.getJointName() << "| pos: " << trackPosition << " rot: " << trackRotation;
+                if (trackPosition)
+                {
+                    auto jointAbsPose = _skeleton->getAbsolutePose(targetVar.jointIndex, _relativePoses);
+                    const glm::mat4 geomToWorldMatrix = context.getRigToWorldMatrix() * context.getGeometryToRigMatrix();
+                    const glm::vec3 jointWorldPos = transformPoint(geomToWorldMatrix, jointAbsPose.trans());
+
+                    qCCritical(animation) << "GK_GK tracker: " << targetVar.getJointName() << " | pos: " << trackerInHFWorldSpace.trans() << " | jointPos: " << jointWorldPos;
+                }
+
                 // debug render ik targets
-                if (context.getEnableDebugDrawIKTargets()) {
+                if (context.getEnableDebugDrawIKTargets() && (trackPosition || trackRotation)) {
+                    {
+                        auto jointAbsPose = _skeleton->getAbsolutePose(targetVar.jointIndex, _relativePoses);
+                        const glm::mat4 geomToWorldMatrix = context.getRigToWorldMatrix() * context.getGeometryToRigMatrix();
+
+                        static const glm::vec4 RED(1.0f, 0.0f, 0.0f, 0.5f);
+                        const glm::vec3 pos = transformPoint(geomToWorldMatrix, jointAbsPose.trans());
+                        DebugDraw::getInstance().drawRay(trackerInHFWorldSpace.trans(), pos, RED);
+                    }
+
                     const QString name = "tracker_" + targetVar.controllerBoneTargetName;
 #ifdef DLL_WITH_DEBUG_VISU
                     if (!targetVar.debugBody) {
@@ -548,27 +593,10 @@ void DeepMotionNode::computeTargets(const AnimContext& context, const AnimVarian
                     static const glm::vec4 GREEN(0.0f, 1.0f, 0.0f, 1.0f);
                     DebugDraw::getInstance().addMyAvatarMarker(name, glmExtractRotation(avatarTargetMat), extractTranslation(avatarTargetMat), GREEN);
                 }
-
-                const auto& boneTarget = targetVar.getControllerBoneTarget();
-                const auto& trackerTransform = targetVar.transform;
-
-                _characterController->SetLimbPositionTrackingEnabled(boneTarget, targetVar.trackPosition);
-                if (targetVar.trackPosition) {
-                    _characterController->SetTrackingPosition(boneTarget, trackerTransform.m_Position);
-                    _isAnyTrackerActive = true;
-                }
-                
-                if (boneTarget != avatar::IHumanoidControllerHandle::BoneTarget::Root) {
-                    _characterController->SetLimbOrientationTrackingEnabled(boneTarget, targetVar.trackRotation);
-                    if (targetVar.trackRotation) {
-                        _characterController->SetTrackingOrientation(boneTarget, trackerTransform.m_Orientation);
-                        _isAnyTrackerActive = true;
-                    }
-                }
             }
         }
 
-        if (debugDrawIKTargetsDisabledInLastFrame || targetVar.jointIndex == -1 || targetType != (int)IKTargetVar::IKTargetType::DMTracker) {
+        if (debugDrawIKTargetsDisabledInLastFrame || targetVar.jointIndex == -1 || targetType == (int)IKTarget::Type::Unknown) {
             DebugDraw::getInstance().removeMyAvatarMarker("tracker_" + targetVar.controllerBoneTargetName);
 #ifdef DLL_WITH_DEBUG_VISU
             if (targetVar.debugBody) {
@@ -578,7 +606,7 @@ void DeepMotionNode::computeTargets(const AnimContext& context, const AnimVarian
 #endif
         }
 
-        if (targetVar.jointIndex == -1 || targetType != (int)IKTargetVar::IKTargetType::DMTracker) {
+        if (targetVar.jointIndex == -1 || targetType == (int)IKTarget::Type::Unknown) {
             const auto& boneTarget = targetVar.getControllerBoneTarget();
             _characterController->SetLimbPositionTrackingEnabled(boneTarget, false);
             if (boneTarget != avatar::IHumanoidControllerHandle::BoneTarget::Root)
